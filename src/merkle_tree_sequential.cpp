@@ -6,6 +6,7 @@
 #include <openssl/evp.h>
 #include <sstream>
 #include <iomanip>
+#include "header_merkle_tree.hpp"
 
 class Node
 {
