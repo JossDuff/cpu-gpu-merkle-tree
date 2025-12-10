@@ -5,13 +5,15 @@
 #include <iomanip>
 #include <random>
 #include <sstream>
+#include <fstream>
+#include <ctime>
 
 // Generate random data of specified size
 std::vector<std::string> generateRandomData(size_t count, size_t min_size, size_t max_size)
 {
     std::vector<std::string> data(count);
     std::random_device rd;
-    std::mt19937 gen(rd());
+    std::mt19937 gen(42); // Fixed seed for reproducibility across benchmarks
     std::uniform_int_distribution<> size_dist(min_size, max_size);
     std::uniform_int_distribution<> char_dist(32, 126); // Printable ASCII
 
@@ -93,9 +95,48 @@ std::string formatNumber(size_t num)
     return str;
 }
 
+// CSV writer for results (compatible with gpu_benchmark format)
+class CSVWriter {
+private:
+    std::ofstream file_;
+
+public:
+    CSVWriter(const std::string& filename) {
+        file_.open(filename);
+        // Write header (same format as gpu_benchmark)
+        file_ << "Test,Implementation,DataCount,TotalBytes,ChunkSize,"
+              << "TimeMS,ThroughputMBps,Speedup,MemoryH2DMS,KernelMS,MemoryD2HMS,Success\n";
+    }
+
+    ~CSVWriter() {
+        if (file_.is_open()) {
+            file_.close();
+        }
+    }
+
+    void writeResult(const std::string& test_name, const std::string& implementation,
+                    size_t data_count, size_t total_bytes, size_t threads,
+                    double time_ms, double speedup) {
+        double throughput_mbps = (total_bytes / 1024.0 / 1024.0) / (time_ms / 1000.0);
+
+        file_ << test_name << ","
+              << implementation << ","
+              << data_count << ","
+              << total_bytes << ","
+              << threads << ","  // Use threads column for thread count (CPU has no chunk size)
+              << time_ms << ","
+              << throughput_mbps << ","
+              << speedup << ","
+              << "0,0,0,"  // CPU has no GPU timings
+              << "1\n";  // Success
+        file_.flush();
+    }
+};
+
 // Run benchmark for a specific configuration
 void runBenchmark(const std::string &test_name,
                   const std::vector<std::string> &data,
+                  CSVWriter& csv_writer,
                   bool run_sequential = true)
 {
     std::cout << "\n=== " << test_name << " ===\n";
@@ -136,6 +177,10 @@ void runBenchmark(const std::string &test_name,
         {
             std::cout << "  Root: " << seq.getRoot()->hash.substr(0, 16) << "...\n";
         }
+
+        // Write to CSV
+        csv_writer.writeResult(test_name, "Sequential", data.size(), total_bytes,
+                              1, sequential_time, 1.0);
     }
 
     // Parallel benchmarks
@@ -149,9 +194,9 @@ void runBenchmark(const std::string &test_name,
     double baseline_time = 0;
     std::string root_hash;
 
-    for (size_t threads : {1, 2, 4, 8, 16, 32})
+    for (size_t threads : {1, 2, 4, 8, 16})
     {
-        if (threads > std::thread::hardware_concurrency() * 2)
+        if (threads > std::thread::hardware_concurrency())
             break;
 
         MerkleTreeLockFree parallel(threads);
@@ -181,6 +226,10 @@ void runBenchmark(const std::string &test_name,
                   << std::setw(15) << std::fixed << std::setprecision(2) << speedup << "x"
                   << std::setw(20) << std::fixed << std::setprecision(2) << throughput
                   << "\n";
+
+        // Write to CSV
+        csv_writer.writeResult(test_name, "Multithread", data.size(), total_bytes,
+                              threads, time_ms, speedup);
     }
 
     // Verify correctness if sequential was run
@@ -198,10 +247,24 @@ void runBenchmark(const std::string &test_name,
 int main()
 {
     std::cout << "╔════════════════════════════════════════════════════════════╗\n";
-    std::cout << "║    Merkle Tree Performance Benchmark Suite                 ║\n";
+    std::cout << "║    Merkle Tree Performance Benchmark Suite (CPU Only)      ║\n";
     std::cout << "╚════════════════════════════════════════════════════════════╝\n";
     std::cout << "\nHardware: " << std::thread::hardware_concurrency()
               << " concurrent threads available\n";
+
+    // Create plots directory and CSV writer
+    system("mkdir -p plots");
+
+    auto now = std::chrono::system_clock::now();
+    auto now_c = std::chrono::system_clock::to_time_t(now);
+    std::stringstream filename_ss;
+    filename_ss << "plots/cpu_benchmark_results_"
+                << std::put_time(std::localtime(&now_c), "%Y%m%d_%H%M%S")
+                << ".csv";
+    std::string results_filename = filename_ss.str();
+
+    CSVWriter csv_writer(results_filename);
+    std::cout << "Results will be saved to: " << results_filename << "\n";
 
     // ============================================================================
     // Test 1: Small uniform data (baseline)
@@ -213,7 +276,7 @@ int main()
             ".", "*£$àze()", "GG"};
 
         std::vector<std::string> data(smallData.begin(), smallData.end());
-        runBenchmark("Test 1: Small Uniform Data (10 items)", data, true);
+        runBenchmark("Test 1: Small Uniform Data (10 items)", data, csv_writer, true);
     }
 
     // ============================================================================
@@ -221,7 +284,7 @@ int main()
     // ============================================================================
     {
         auto data = generateRandomData(1000, 10, 50);
-        runBenchmark("Test 2: 1K Tiny Random Strings", data, true);
+        runBenchmark("Test 2: 1K Tiny Random Strings", data, csv_writer, true);
     }
 
     // ============================================================================
@@ -229,7 +292,7 @@ int main()
     // ============================================================================
     {
         auto data = generateStructuredData(10000);
-        runBenchmark("Test 3: 10K Structured Records", data, true);
+        runBenchmark("Test 3: 10K Structured Records", data, csv_writer, true);
     }
 
     // ============================================================================
@@ -237,7 +300,7 @@ int main()
     // ============================================================================
     {
         auto data = generateRandomData(100000, 50, 500);
-        runBenchmark("Test 4: 100K Variable Size Items", data, true);
+        runBenchmark("Test 4: 100K Variable Size Items", data, csv_writer, true);
     }
 
     // ============================================================================
@@ -245,7 +308,7 @@ int main()
     // ============================================================================
     {
         auto data = generateRandomData(500000, 100, 300);
-        runBenchmark("Test 5: 500K Medium Workload", data, false); // Skip sequential (too slow)
+        runBenchmark("Test 5: 500K Medium Workload", data, csv_writer, true); // Run sequential
     }
 
     // ============================================================================
@@ -253,7 +316,7 @@ int main()
     // ============================================================================
     {
         auto data = generateRandomData(1000000, 256, 256);
-        runBenchmark("Test 6: 1M Large Uniform Blocks", data, false);
+        runBenchmark("Test 6: 1M Large Uniform Blocks", data, csv_writer, true); // Run sequential
     }
 
     // ============================================================================
@@ -261,7 +324,7 @@ int main()
     // ============================================================================
     {
         auto data = generateRandomData(2000000, 10, 1000);
-        runBenchmark("Test 7: 2M Highly Variable Data", data, false);
+        runBenchmark("Test 7: 2M Highly Variable Data", data, csv_writer, false);
     }
 
     // ============================================================================
@@ -269,7 +332,7 @@ int main()
     // ============================================================================
     {
         auto data = generateLargeTextBlocks(10000, 10000); // 10KB each = ~100MB total
-        runBenchmark("Test 8: 10K Large Text Documents (10KB each)", data, true);
+        runBenchmark("Test 8: 10K Large Text Documents (10KB each)", data, csv_writer, true);
     }
 
     // ============================================================================
@@ -279,19 +342,32 @@ int main()
         std::cout << "\n=== Test 9: 5M Items - Stress Test ===\n";
         std::cout << "Generating data...\n";
         auto data = generateRandomData(5000000, 100, 200);
-        runBenchmark("Test 9: 5M Items Stress Test", data, false);
+        runBenchmark("Test 9: 5M Items Stress Test", data, csv_writer, false);
+    }
+
+    // ============================================================================
+    // Test 10: 10M items - Maximum scale test
+    // ============================================================================
+    {
+        std::cout << "\n=== Test 10: 10M Items - Maximum Scale Test ===\n";
+        std::cout << "Generating data...\n";
+        auto data = generateRandomData(10000000, 128, 256);
+        runBenchmark("Test 10: 10M Items Maximum Scale", data, csv_writer, false);
     }
     // ============================================================================
     // Summary
     // ============================================================================
     std::cout << "\n╔════════════════════════════════════════════════════════════╗\n";
-    std::cout << "║                    Benchmark Complete                      ║\n";
+    std::cout << "║              CPU Benchmark Complete                        ║\n";
+    std::cout << "║          Results saved to: " << std::left << std::setw(25)
+              << results_filename.substr(results_filename.find_last_of("/")+1) << " ║\n";
     std::cout << "╚════════════════════════════════════════════════════════════╝\n";
     std::cout << "\nKey Findings:\n";
     std::cout << "- Thread pool eliminates thread creation overhead\n";
     std::cout << "- Near-linear scaling up to physical core count\n";
     std::cout << "- Adaptive parallelism optimizes small workloads\n";
-    std::cout << "- Lock-free design enables high throughput\n";
+    std::cout << "- Lock-free design enables high throughput\n\n";
+    std::cout << "Next: Run './gpu_benchmark' to compare GPU performance\n";
 
     return 0;
 }

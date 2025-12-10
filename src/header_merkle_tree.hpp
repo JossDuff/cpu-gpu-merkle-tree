@@ -205,6 +205,12 @@ public:
     // Get root hash as string
     const std::string &getRootHash() const;
 
+    // High-level build interface for compatibility
+    void build(const std::vector<std::string>& data, size_t chunkSize = 32);
+
+    // Get leaf hashes
+    const std::vector<std::string>& getLeafHashes() const;
+
 private:
     Node *root;
     std::string root_hash;
@@ -221,6 +227,7 @@ private:
 
     // Private helper methods
     std::string hashToString(const std::array<unsigned char, 32> &hash);
+    std::array<unsigned char, 32> hexStringToBytes(const std::string& hex);
     void buildTreeWithPool(const std::vector<std::vector<std::byte>> &chunks);
     Node *constructNodeTree();
     void deleteTree(Node *node);
@@ -275,11 +282,19 @@ public:
     // Get root node
     Node *getRoot() const;
 
+    // High-level build interface for compatibility
+    void build(const std::vector<std::string>& data, size_t chunkSize = 32);
+
+    // Get leaf hashes
+    const std::vector<std::string>& getLeafHashes() const;
+
 private:
     Node *root;
+    std::vector<std::string> leaf_hashes_;
 
     // Private helper methods
     std::string hashToString(const std::array<unsigned char, 32> &hash);
+    std::array<unsigned char, 32> hexStringToBytes(const std::string& hex);
     Node *buildTree(std::vector<Node *> &nodes);
     void deleteTree(Node *node);
 };

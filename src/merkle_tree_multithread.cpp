@@ -63,6 +63,18 @@ std::string MerkleTreeLockFree::hashToString(const std::array<unsigned char, 32>
     return ss.str();
 }
 
+// Helper: Convert hex string back to binary (32 bytes)
+std::array<unsigned char, 32> MerkleTreeLockFree::hexStringToBytes(const std::string& hex)
+{
+    std::array<unsigned char, 32> bytes;
+    for (size_t i = 0; i < 32; i++)
+    {
+        std::string byteString = hex.substr(i * 2, 2);
+        bytes[i] = static_cast<unsigned char>(std::stoi(byteString, nullptr, 16));
+    }
+    return bytes;
+}
+
 Node *MerkleTreeLockFree::getRoot() const
 {
     return root;
@@ -120,16 +132,21 @@ void MerkleTreeLockFree::buildLayerSequential(const std::vector<std::string> &cu
             right_hash = left_hash;
         }
 
-        // Concatenate the hash STRINGS (hex representation)
-        std::string combined = left_hash + right_hash;
+        // Convert hex strings to binary (32 bytes each)
+        auto left_binary = hexStringToBytes(left_hash);
+        auto right_binary = hexStringToBytes(right_hash);
 
-        // Convert the combined hex string to bytes
+        // Concatenate binary hashes (64 bytes total)
         std::vector<std::byte> combinedBytes;
-        combinedBytes.reserve(combined.size());
+        combinedBytes.reserve(64);
 
-        for (char c : combined)
+        for (size_t i = 0; i < 32; i++)
         {
-            combinedBytes.push_back(static_cast<std::byte>(c));
+            combinedBytes.push_back(static_cast<std::byte>(left_binary[i]));
+        }
+        for (size_t i = 0; i < 32; i++)
+        {
+            combinedBytes.push_back(static_cast<std::byte>(right_binary[i]));
         }
 
         // Hash the combined bytes
@@ -215,16 +232,21 @@ void MerkleTreeLockFree::buildTreeWithPool(const std::vector<std::vector<std::by
                         std::string left_hash = current_layer[i];
                         std::string right_hash = current_layer[i + 1];
 
-                        // Concatenate the hash STRINGS (hex representation)
-                        std::string combined = left_hash + right_hash;
+                        // Convert hex strings to binary (32 bytes each)
+                        auto left_binary = this->hexStringToBytes(left_hash);
+                        auto right_binary = this->hexStringToBytes(right_hash);
 
-                        // Convert the combined hex string to bytes
+                        // Concatenate binary hashes (64 bytes total)
                         std::vector<std::byte> combinedBytes;
-                        combinedBytes.reserve(combined.size());
-                        
-                        for (char c : combined)
+                        combinedBytes.reserve(64);
+
+                        for (size_t j = 0; j < 32; j++)
                         {
-                            combinedBytes.push_back(static_cast<std::byte>(c));
+                            combinedBytes.push_back(static_cast<std::byte>(left_binary[j]));
+                        }
+                        for (size_t j = 0; j < 32; j++)
+                        {
+                            combinedBytes.push_back(static_cast<std::byte>(right_binary[j]));
                         }
 
                         // Hash the combined bytes
@@ -295,14 +317,20 @@ Node *MerkleTreeLockFree::constructNodeTree()
                 right = new Node(left->hash);
             }
 
-            // Concatenate and hash
-            std::string combined = left->hash + right->hash;
-            std::vector<std::byte> combinedBytes;
-            combinedBytes.reserve(combined.size());
+            // Convert hex strings to binary and concatenate
+            auto left_binary = hexStringToBytes(left->hash);
+            auto right_binary = hexStringToBytes(right->hash);
 
-            for (char c : combined)
+            std::vector<std::byte> combinedBytes;
+            combinedBytes.reserve(64);
+
+            for (size_t i = 0; i < 32; i++)
             {
-                combinedBytes.push_back(static_cast<std::byte>(c));
+                combinedBytes.push_back(static_cast<std::byte>(left_binary[i]));
+            }
+            for (size_t i = 0; i < 32; i++)
+            {
+                combinedBytes.push_back(static_cast<std::byte>(right_binary[i]));
             }
 
             auto parentHash = hash256(combinedBytes);
@@ -326,6 +354,17 @@ void MerkleTreeLockFree::deleteTree(Node *node)
         deleteTree(node->right);
         delete node;
     }
+}
+
+// High-level build interface
+void MerkleTreeLockFree::build(const std::vector<std::string>& data, size_t chunkSize) {
+    std::vector<std::byte> byte_data = transformStringArray(data);
+    constructor(byte_data, chunkSize);
+}
+
+// Get leaf hashes
+const std::vector<std::string>& MerkleTreeLockFree::getLeafHashes() const {
+    return leaf_hashes_;
 }
 
 // ============================================================================
@@ -368,6 +407,18 @@ std::string MerkleTreeSequential::hashToString(const std::array<unsigned char, 3
     return ss.str();
 }
 
+// Helper: Convert hex string back to binary (32 bytes)
+std::array<unsigned char, 32> MerkleTreeSequential::hexStringToBytes(const std::string& hex)
+{
+    std::array<unsigned char, 32> bytes;
+    for (size_t i = 0; i < 32; i++)
+    {
+        std::string byteString = hex.substr(i * 2, 2);
+        bytes[i] = static_cast<unsigned char>(std::stoi(byteString, nullptr, 16));
+    }
+    return bytes;
+}
+
 Node *MerkleTreeSequential::getRoot() const
 {
     return root;
@@ -379,6 +430,7 @@ void MerkleTreeSequential::constructor(std::vector<std::byte> data, size_t chunk
         return;
 
     std::vector<Node *> leaves;
+    leaf_hashes_.clear();
 
     for (size_t i = 0; i < data.size(); i += chunkSize)
     {
@@ -386,7 +438,9 @@ void MerkleTreeSequential::constructor(std::vector<std::byte> data, size_t chunk
         std::vector<std::byte> chunk(data.begin() + i, data.begin() + end);
 
         auto hash = hash256(chunk);
-        leaves.push_back(new Node(hashToString(hash)));
+        std::string hash_str = hashToString(hash);
+        leaf_hashes_.push_back(hash_str);
+        leaves.push_back(new Node(hash_str));
     }
 
     root = buildTree(leaves);
@@ -416,11 +470,20 @@ Node *MerkleTreeSequential::buildTree(std::vector<Node *> &nodes)
             right = new Node(left->hash);
         }
 
-        std::string combined = left->hash + right->hash;
+        // Convert hex strings to binary and concatenate
+        auto left_binary = hexStringToBytes(left->hash);
+        auto right_binary = hexStringToBytes(right->hash);
+
         std::vector<std::byte> combinedBytes;
-        for (char c : combined)
+        combinedBytes.reserve(64);
+
+        for (size_t i = 0; i < 32; i++)
         {
-            combinedBytes.push_back(static_cast<std::byte>(c));
+            combinedBytes.push_back(static_cast<std::byte>(left_binary[i]));
+        }
+        for (size_t i = 0; i < 32; i++)
+        {
+            combinedBytes.push_back(static_cast<std::byte>(right_binary[i]));
         }
 
         auto parentHash = hash256(combinedBytes);
@@ -441,4 +504,15 @@ void MerkleTreeSequential::deleteTree(Node *node)
         deleteTree(node->right);
         delete node;
     }
+}
+
+// High-level build interface
+void MerkleTreeSequential::build(const std::vector<std::string>& data, size_t chunkSize) {
+    std::vector<std::byte> byte_data = transformStringArray(data);
+    constructor(byte_data, chunkSize);
+}
+
+// Get leaf hashes
+const std::vector<std::string>& MerkleTreeSequential::getLeafHashes() const {
+    return leaf_hashes_;
 }
